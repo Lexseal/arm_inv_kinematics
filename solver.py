@@ -18,8 +18,10 @@ class Inv_kin():
         self.state = [(self.theta_s_min+self.theta_s_max)/2,
                      (self.theta_a_min+self.theta_a_max)/2, 
                      (self.theta_e_min+self.theta_e_max)/2]
+        self.bound = optimize.Bounds([self.theta_s_min, self.theta_a_min, self.theta_e_min], 
+                                     [self.theta_s_max, self.theta_a_max, self.theta_e_max])
 
-    def build_func(self, des_pos, abs_val=True):
+    def build_func(self, des_pos, abs_val=True, norm=False):
         des_x, des_y, des_z = des_pos
         def cartesian(angle):
             """ takes in shoulder, arm, and elbow rotation and spits out end cartesian """
@@ -31,8 +33,9 @@ class Inv_kin():
             y = xy_vec*sin(theta_s)
             z = self.L_a*sin(theta_a)-self.L_e*cos(theta)
 
-            if abs_val: return abs(x-des_x), abs(y-des_y), abs(z-des_z)
-            return x-des_x, y-des_y, z-des_z
+            if norm: return np.linalg.norm([x-des_x, y-des_y, z-des_z])
+            elif abs_val: return abs(x-des_x), abs(y-des_y), abs(z-des_z)
+            else: return x-des_x, y-des_y, z-des_z
         return cartesian
 
     def calc_range(self):
@@ -54,39 +57,46 @@ class Inv_kin():
         print(x_min, x_max)
         print(y_min, y_max)
         print(z_min, z_max)
+        # TODO save the lookup table
         return point_list
 
     def solve(self, des_pt, init=None):
         if init==None: init = self.state
         func = self.build_func(des_pt)
         root = optimize.root(func, init, method="hybr")
-        if not root.success: return False
-        self.state = root.x
+        if not root.success: return None
+        self.state = root.x # if succeeds
         return root.x
 
-    def benchmark(self):
+    def minimize(self, des_pt, init=None):
+        if init==None: init = self.state
+        func = self.build_func(des_pt, norm=True)
+        root = optimize.minimize(func, init, bounds=self.bound)
+        if not root.success: return None
+        self.state = root.x # if succeeds
+        return root.x
+
+    def benchmark(self, find_root=True):
         legal_points = self.calc_range()
         shuffle(legal_points)
-        init = [(self.theta_s_min+self.theta_s_max)/2,  (self.theta_a_min+self.theta_a_max)/2, (self.theta_e_min+self.theta_e_max)/2] # init angles
         count = 0
         iter = 10000
         start_time = time.time()
         for i, pt in enumerate(legal_points[:iter]): # num of queries
             des_pt = pt[1]
-            func = self.build_func(des_pt) # final cartesian
-            root = optimize.root(func, init, method="hybr")
-            if not root.success:
+            if find_root: root = self.solve(des_pt)
+            else: root = self.minimize(des_pt)
+            if root is None:
                 count+=1
-                print(i, des_pt, root.x, pt[0], "\n")
+                print(i, des_pt) # print out the failed point
                 continue
-            init = root.x
-        print(count/iter*100, "percent error rate", time.time()-start_time)
+        print(count/iter*100, "% error rate", time.time()-start_time)
 
 if __name__ == "__main__":
     inv_kin = Inv_kin()
     if len(sys.argv) != 4: inv_kin.benchmark()
     else:
         des_pt = list(map(float, sys.argv[1:4]))
-        angles = inv_kin.solve(des_pt)
+        angles = inv_kin.minimize(des_pt)
         print(angles)
-        print(inv_kin.state)
+        #print(inv_kin.state)
