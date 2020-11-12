@@ -9,11 +9,11 @@ class Inv_kin():
     def __init__(self):
         self.L_a = 0.409575 # length of arm
         self.L_e = 0.4699 # length of elbow
-        self.theta_s_min = -0.78
-        self.theta_s_max = 0.78 # shoulder pivot
+        self.theta_s_min = -1
+        self.theta_s_max = 1 # shoulder pivot
         self.theta_a_min = 0.4
         self.theta_a_max = 2 # arm updown
-        self.theta_e_min = -0.78
+        self.theta_e_min = 0
         self.theta_e_max = 2.35 # elbow updown
         self.state = [(self.theta_s_min+self.theta_s_max)/2,
                      (self.theta_a_min+self.theta_a_max)/2, 
@@ -60,13 +60,21 @@ class Inv_kin():
         # TODO save the lookup table
         return point_list
 
+    def within_limit(self, solution):
+        for i, angle in enumerate(solution):
+            if angle < self.bound.lb[i] or angle > self.bound.ub[i]:
+                return False
+        return True
+
     def solve(self, des_pt, init=None):
         if init==None: init = self.state
         func = self.build_func(des_pt)
         root = optimize.root(func, init, method="hybr")
-        if not root.success: return None
-        self.state = root.x # if succeeds
-        return root.x
+        if root.success and self.within_limit(root.x):
+            #self.state = root.x # if succeeds
+            return root.x
+        print(root.x)
+        return None # fails
 
     def minimize(self, des_pt, init=None):
         if init==None: init = self.state
@@ -76,7 +84,7 @@ class Inv_kin():
         self.state = root.x # if succeeds
         return root.x
 
-    def benchmark(self, find_root=True):
+    def benchmark(self, find_root=False):
         legal_points = self.calc_range()
         shuffle(legal_points)
         count = 0
