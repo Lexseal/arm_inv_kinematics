@@ -1,6 +1,7 @@
-from scipy import optimize
+from scipy import optimize, spatial
 from math import sin, cos, pi
 from random import random, shuffle
+import os.path
 import sys
 import numpy as np
 import time
@@ -17,10 +18,12 @@ class Inv_kin():
         self.theta_e_max = 2.35 # elbow updown
         self.state = [(self.theta_s_min+self.theta_s_max)/2,
                      (self.theta_a_min+self.theta_a_max)/2, 
-                     (self.theta_e_min+self.theta_e_max)/2]
+                     (self.theta_e_min+self.theta_e_max)/2] # initial state
         self.bound = optimize.Bounds([self.theta_s_min, self.theta_a_min, self.theta_e_min], 
                                      [self.theta_s_max, self.theta_a_max, self.theta_e_max])
-
+        self.lookup_table = self.load_table()
+        self.kd_tree = self.build_kd_tree()
+        
     def build_func(self, des_pos, abs_val=True, norm=False):
         des_x, des_y, des_z = des_pos
         def cartesian(angle):
@@ -47,18 +50,28 @@ class Inv_kin():
             for j in np.linspace(self.theta_a_min, self.theta_a_max, 90):
                 for k in np.linspace(self.theta_e_min, self.theta_e_max, 180):
                     pt = func([i, j, k])
-                    point_list.append([[i, j, k], pt])
-                    if (pt[0] < x_min): x_min = pt[0]
-                    if (pt[0] > x_max): x_max = pt[0]
-                    if (pt[1] < y_min): y_min = pt[1]
-                    if (pt[1] > y_max): y_max = pt[1]
-                    if (pt[2] < z_min): z_min = pt[2]
-                    if (pt[2] > z_max): z_max = pt[2]
+                    x_min = min(x_min, pt[0])
+                    x_max = max(x_max, pt[0])
+                    y_min = min(y_min, pt[1])
+                    y_max = max(y_max, pt[1])
+                    z_min = min(z_min, pt[2])
+                    z_max = max(z_max, pt[2])
+                    point_list.append([*pt, i, j, k])
         print(x_min, x_max)
         print(y_min, y_max)
         print(z_min, z_max)
-        # TODO save the lookup table
+        
+        np.save("lookup_table.npy", np.array(point_list)) # save the table
         return point_list
+
+    def load_table(self):
+        if os.path.exists("lookup_table.npy"): # table already exists
+            # point list is of the form [x, y, z, swivel, updown, elbow]
+            return list(np.load("lookup_table.npy"))
+        return self.calc_range()
+
+    def build_kd_tree(self):
+        return spatial.KDTree(np.array(self.lookup_table)[:, :3])
 
     def within_limit(self, solution):
         for i, angle in enumerate(solution):
@@ -84,16 +97,28 @@ class Inv_kin():
         self.state = root.x # if succeeds
         return root.x
 
-    def benchmark(self, find_root=False):
-        legal_points = self.calc_range()
+    def look_up_sol(self, des_pt, init=None):
+        if init==None: init = self.state
+        root_idx = self.kd_tree.query_ball_point(des_pt, 0.01)
+        root = None
+        lowest_diff = sys.maxsize
+        for i in root_idx:
+            matching_state = np.array(self.lookup_table[i][3:]) # angles
+            diff = np.linalg.norm(matching_state-np.array(self.state))
+            if diff < lowest_diff:
+                lowest_diff = diff
+                root = self.lookup_table[i][3:]
+        return root
+
+    def benchmark(self, method):
+        legal_points = self.lookup_table.copy()
         shuffle(legal_points)
         count = 0
         iter = 10000
         start_time = time.time()
         for i, pt in enumerate(legal_points[:iter]): # num of queries
-            des_pt = pt[1]
-            if find_root: root = self.solve(des_pt)
-            else: root = self.minimize(des_pt)
+            des_pt = pt[:3]
+            root = method(des_pt)
             if root is None:
                 count+=1
                 print(i, des_pt) # print out the failed point
@@ -102,9 +127,11 @@ class Inv_kin():
 
 if __name__ == "__main__":
     inv_kin = Inv_kin()
-    if len(sys.argv) != 4: inv_kin.benchmark()
+    if len(sys.argv) != 4: inv_kin.benchmark(inv_kin.look_up_sol)
     else:
         des_pt = list(map(float, sys.argv[1:4]))
         angles = inv_kin.minimize(des_pt)
+        print(angles)
+        angles = inv_kin.look_up_sol(des_pt)
         print(angles)
         #print(inv_kin.state)
